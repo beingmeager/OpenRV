@@ -7,11 +7,22 @@
 
 #include <TwkFB/IO.h>
 #include <iostream>
+#include <fstream>
+#include <set>
 #include <vector>
 #include <string>
 #include <boost/program_options.hpp>
 #include <boost/algorithm/string.hpp>
 #include <boost/algorithm/string/split.hpp>
+
+#if defined(PLATFORM_WINDOWS)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
 
 using namespace TwkFB;
 using namespace std;
@@ -61,6 +72,109 @@ static const char* disallowedCodecsArray[] = {
 #endif
     0};
 
+// Runtime non-free codec allowlist.
+//
+//   The disallowedCodecsArray above is fixed at compile time. On a machine that
+//   is licensed to use one or more of those codecs (and has replaced the FFmpeg
+//   DLLs with a full-codec build), the user can re-enable them WITHOUT
+//   recompiling RV, by either:
+//     - setting RV_NONFREE_CODECS (e.g. "prores;dnxhd" or "all"), or
+//     - dropping a "nonfree-codecs.txt" file next to this library
+//       (on an install that is {app}\PlugIns\MovieFormats\, the directory
+//       holding mio_ffmpeg.dll -- NOT {app}\bin where the FFmpeg DLLs live).
+//
+//   Absent/empty allowlist => identical to the original behavior (disallowed
+//   codecs stay disallowed). "all" (or "*") unlocks every name the DLL provides,
+//   including those blocked even in the private build (e.g. hevc, mpeg2video).
+//
+namespace
+{
+    struct NonFreeAllowlist
+    {
+        bool all = false;
+        std::set<std::string> names;
+    };
+
+    // Directory containing this shared library (mio_ffmpeg.dll), where
+    // nonfree-codecs.txt is read from -- on an install that is
+    // {app}\PlugIns\MovieFormats\, not {app}\bin.
+    std::string moduleDir()
+    {
+#if defined(PLATFORM_WINDOWS)
+        HMODULE hm = nullptr;
+        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               reinterpret_cast<LPCSTR>(&moduleDir), &hm)
+            && hm)
+        {
+            char path[MAX_PATH] = {0};
+            DWORD n = GetModuleFileNameA(hm, path, MAX_PATH);
+            if (n > 0 && n < MAX_PATH)
+            {
+                std::string p(path, n);
+                size_t slash = p.find_last_of("\\/");
+                if (slash != std::string::npos)
+                    return p.substr(0, slash);
+            }
+        }
+#else
+        Dl_info info;
+        if (dladdr(reinterpret_cast<void*>(&moduleDir), &info) && info.dli_fname)
+        {
+            std::string p(info.dli_fname);
+            size_t slash = p.find_last_of('/');
+            if (slash != std::string::npos)
+                return p.substr(0, slash);
+        }
+#endif
+        return std::string();
+    }
+
+    // Split on separators common to env vars and text files; '#' starts a
+    // comment token. Names are lowercased to match FFmpeg's codec names.
+    void addTokens(const std::string& text, NonFreeAllowlist& out)
+    {
+        std::vector<std::string> tokens;
+        boost::split(tokens, text, boost::is_any_of(";, \t\r\n"), boost::token_compress_on);
+        for (std::string tok : tokens)
+        {
+            boost::trim(tok);
+            if (tok.empty() || tok[0] == '#')
+                continue;
+            boost::to_lower(tok);
+            if (tok == "all" || tok == "*")
+                out.all = true;
+            else
+                out.names.insert(tok);
+        }
+    }
+
+    const NonFreeAllowlist& nonFreeAllowlist()
+    {
+        static const NonFreeAllowlist allowlist = []()
+        {
+            NonFreeAllowlist a;
+
+            if (const char* env = getenv("RV_NONFREE_CODECS"))
+                addTokens(env, a);
+
+            std::string dir = moduleDir();
+            if (!dir.empty())
+            {
+                std::ifstream in((dir + "/nonfree-codecs.txt").c_str());
+                if (in)
+                {
+                    std::string line;
+                    while (std::getline(in, line))
+                        addTokens(line, a);
+                }
+            }
+
+            return a;
+        }();
+        return allowlist;
+    }
+} // namespace
+
 extern "C"
 {
 
@@ -72,14 +186,26 @@ extern "C"
 
     static bool codecIsAllowed(std::string name, bool forRead = true)
     {
+        bool disallowed = false;
         for (const char** p = disallowedCodecsArray; *p; p++)
         {
             if (*p == name)
             {
-                return false;
+                disallowed = true;
+                break;
             }
         }
-        return true;
+
+        if (!disallowed)
+            return true;
+
+        // Compiled-out codec: a runtime allowlist can re-enable it on a
+        // licensed machine without rebuilding RV.
+        const NonFreeAllowlist& allow = nonFreeAllowlist();
+        if (allow.all || allow.names.count(boost::to_lower_copy(name)))
+            return true;
+
+        return false;
     };
 
     TwkMovie::MovieIO* create()

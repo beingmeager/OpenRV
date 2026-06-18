@@ -27,7 +27,7 @@ IF(RV_BUILD_MIO_FFMPEG)
 
   TARGET_LINK_LIBRARIES(
     ${_target}
-    PRIVATE MovieFFMpeg Boost::program_options TwkFB
+    PRIVATE MovieFFMpeg Boost::program_options TwkFB ${CMAKE_DL_LIBS}
   )
 
   IF(RV_TARGET_WINDOWS)
