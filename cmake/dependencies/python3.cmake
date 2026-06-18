@@ -287,9 +287,10 @@ SET(RV_PYTHON_BUILD_DEPS
     CACHE STRING "Build dependencies to install first (from wheels)"
 )
 
-# List of packages that are safe to install from pre-built wheels. All other packages (those with C/C++/Rust extensions) will be built from source to ensure
-# proper linking against our custom Python build. Packages are built from source unless explicitly listed here. This includes: pure Python packages, build tools
-# that don't need ABI compatibility, and packages with data files only.
+# Modified by B, 2026: added "cryptography" and "cffi" to RV_PYTHON_WHEEL_SAFE to allow installing these packages from prebuilt wheels instead of building from
+# source. List of packages that are safe to install from pre-built wheels. All other packages (those with C/C++/Rust extensions) will be built from source to
+# ensure proper linking against our custom Python build. Packages are built from source unless explicitly listed here. This includes: pure Python packages,
+# build tools that don't need ABI compatibility, and packages with data files only.
 SET(RV_PYTHON_WHEEL_SAFE
     ${RV_PYTHON_BUILD_DEPS} # Include build deps in wheel-safe list
     "cmake" # Build tool (self-contained binary wheel, no ABI dependency on Python)
@@ -304,6 +305,8 @@ SET(RV_PYTHON_WHEEL_SAFE
     "hatch-vcs" # Hatchling VCS version plugin (pure Python)
     "pluggy" # Plugin framework (pure Python)
     "pathspec" # Gitignore pattern matching (pure Python)
+    "cryptography" # Use pre-built wheel to avoid Rust/OpenSSL build issues
+    "cffi" # Required by cryptography (pre-built wheel)
     "trove-classifiers" # PyPI classifiers data (pure Python)
     "vcs-versioning" # VCS version detection for setuptools-scm 10.x (pure Python)
     CACHE STRING "Packages safe to install from wheels (pure Python or build tools)"
